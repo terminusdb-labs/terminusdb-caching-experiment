@@ -1,0 +1,39 @@
+server {
+    listen            ${NGINX_PORT};
+    listen       [::]:${NGINX_PORT};
+
+    location @terminusdb {
+        proxy_pass http://terminusdb:6363;
+    }
+
+
+    location / {
+        proxy_pass http://terminusdb:6363;
+    }
+
+    location /api/document {
+        auth_request /auth;
+        auth_request_set $data_version $upstream_http_terminusdb_data_version;
+        auth_request_set $auth_status_code $upstream_status;
+        proxy_cache            STATIC;
+        proxy_cache_valid      200  1d;
+        proxy_cache_key $request_method$uri$is_args$args$data_version;
+        proxy_cache_methods GET;
+        proxy_pass http://terminusdb:6363;
+        add_header X-Weird-StatusCode $auth_status_code;
+        add_header X-Cache-Status $upstream_cache_status;
+        add_header X-Data-Version $data_version;
+        add_header X-Cache-Key $request_method$uri$is_args$args$data_version;
+    }
+
+    location /auth {
+        internal;
+        proxy_method HEAD;
+        proxy_pass http://terminusdb:6363$request_uri;
+    }
+
+    location /error/401 {
+        return 401;
+    }
+}
+

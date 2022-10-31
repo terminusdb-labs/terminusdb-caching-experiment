@@ -1,0 +1,19 @@
+version: "3"
+
+services:
+  terminusdb:
+    image: terminusdb/terminusdb-server:dev
+    tty: true
+    ports:
+      - 6363:6363
+    volumes:
+      - /home/robin/git/terminusdb/terminusdb-fresh/storage:/app/terminusdb/storage
+  web:
+    image: nginx
+    volumes:
+      - ./templates:/etc/nginx/templates
+      - ./proxy.conf:/etc/nginx/conf.d/proxy.conf:ro
+    ports:
+      - "8080:80"
+    environment:
+      - NGINX_PORT=80
