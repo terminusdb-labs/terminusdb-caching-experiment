@@ -1,34 +1,70 @@
 server {
-    listen            ${NGINX_PORT};
-    listen       [::]:${NGINX_PORT};
+    listen            80;
+    listen       [::]:80;
 
-    location @terminusdb {
-        proxy_pass http://terminusdb:6363;
-    }
-
+    resolver local=on ipv6=off;
 
     location / {
         proxy_pass http://terminusdb:6363;
     }
 
     location /api/document {
-        auth_request /auth;
-        auth_request_set $data_version $upstream_http_terminusdb_data_version;
-        auth_request_set $auth_status_code $upstream_status;
-        proxy_cache            STATIC;
-        proxy_cache_valid      200  1d;
-        proxy_cache_key $request_method$uri$is_args$args$data_version;
-        proxy_cache_methods GET;
-        proxy_pass http://terminusdb:6363;
-        add_header X-Weird-StatusCode $auth_status_code;
-        add_header X-Cache-Status $upstream_cache_status;
-        add_header X-Data-Version $data_version;
-        add_header X-Cache-Key $request_method$uri$is_args$args$data_version;
+        set $data_version '';
+
+        access_by_lua_block {
+           res = ngx.location.capture('/terminusdb', { method = ngx.HTTP_HEAD })
+           if res.status == ngx.HTTP_OK then
+              ngx.var.data_version = res.header["Terminusdb-Data-Version"]
+              return
+           end
+           ngx.exit(res.status)
+        }
+
+       content_by_lua_block {
+          if ngx.var.request_method ~= 'GET' then
+             ngx.exec("/terminusdb")
+             return
+          end
+          local redis = require "resty.redis"
+          local red = redis:new()
+          red:set_timeouts(1000, 1000, 1000)
+          local key = ngx.var.data_version .. ngx.var.request_method .. ngx.var.uri .. (ngx.var.args or "")
+          ngx.header['X-Cache-Key'] = key
+          local ok, err = red:connect("redis", 6379)
+          if not ok then
+            ngx.say("failed to connect: ", err)
+            return
+          end
+          local redis_res, err = red:get(key)
+          if not redis_res or redis_res == ngx.null then
+             ngx.header['X-Cache-Status'] = 'MISS'
+             res = ngx.location.capture('/terminusdb')
+             if res.status == ngx.HTTP_OK then
+                red:set(key, res.body)
+             end
+             ngx.say(res.body)
+             return
+          end
+          ngx.header['X-Cache-Status'] = 'HIT'
+          ngx.say(redis_res)
+       }
+    #
+    #    auth_request /auth;
+    #    auth_request_set $data_version $upstream_http_terminusdb_data_version;
+    #    auth_request_set $auth_status_code $upstream_status;
+    #    proxy_cache            STATIC;
+    #    proxy_cache_valid      200  1d;
+    #    proxy_cache_key $request_method$uri$is_args$args$data_version;
+    #    proxy_cache_methods GET;
+    #    proxy_pass http://terminusdb:6363;
+    #    add_header X-Weird-StatusCode $auth_status_code;
+    #    add_header X-Cache-Status $upstream_cache_status;
+    #    add_header X-Data-Version $data_version;
+    #    add_header X-Cache-Key $request_method$uri$is_args$args$data_version;
     }
 
-    location /auth {
+    location /terminusdb {
         internal;
-        proxy_method HEAD;
         proxy_pass http://terminusdb:6363$request_uri;
     }
 
